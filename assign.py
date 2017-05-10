@@ -234,26 +234,31 @@ if __name__ == "__main__":
     cur = psycopg2.connect(user='ets', host='torpedo', database='ETS').cursor()
 
     if options.full:
-        cur.execute("""SELECT bmrbnum FROM entrylog WHERE status LIKE 'rel%'""")
+        entries = requests.get("https://webapi.bmrb.wisc.edu/v1/rest/list_entries/macromolecules").json()
+        entries.extend(requests.get("https://webapi.bmrb.wisc.edu/v1/rest/list_entries/metabolomics").json())
     else:
         cur.execute("""SELECT bmrbnum FROM entrylog WHERE status LIKE 'rel%%' AND accession_date  > current_date - interval '%d days';""" % options.days)
-    entries = [str(x[0]) for x in cur.fetchall()]
+        entries = [str(x[0]) for x in cur.fetchall()]
 
     if options.withdrawn:
         cur.execute("""SELECT bmrbnum FROM entrylog WHERE status LIKE 'awd%' AND bmrbnum IS NOT NULL ORDER BY bmrbnum;""")
         withdrawn = [str(x[0]) for x in cur.fetchall()]
 
     if options.dry_run:
-        print("Would create entries:\n%s" % entries)
+        for en in entries:
+            print("Create or update: %s" % EZIDSession().determine_doi(en))
         if options.withdrawn:
-            print("Would withdraw entries:\n%s" % withdrawn)
+            for en in withdrawn:
+                print("Withdraw: %s" % EZIDSession().determine_doi(en))
         sys.exit(0)
 
     # Start a session
     with EZIDSession() as session:
+        # Assign or update
         for entry in entries:
             session.create_or_update_doi(entry)
 
+        # Withdraw
         if options.withdrawn:
             for entry in [str(x[0]) for x in withdrawn]:
                 session.withdraw(entry)
