@@ -195,10 +195,12 @@ def get_entry_metadata(entry):
     meta = {'_profile': 'datacite'}
 
     # Link should be to entry directory
-    if entry.startswith("bmse") or entry.startswith("bmst"):
+    if entry.startswith("bmse"):
         meta['_target'] = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_data.php?id=%s' % entry
+    elif entry.startswith("bmst"):
+        meta['_target'] = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_theory.php?id=%s' % entry
     else:
-        meta['_target'] = 'http://www.bmrb.wisc.edu/data_library/summary/index.php?bmrbId=%s' % entry
+        meta['_target'] = 'http://www.bmrb.wisc.edu/data_library/summary/?bmrbId=%s' % entry
 
     # Title
     meta['datacite.title'] = ent.get_tag("entry.title")[0].replace("\n","")
