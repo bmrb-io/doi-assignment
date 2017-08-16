@@ -170,7 +170,7 @@ class EZIDSession():
         try:
             ent = self.get_id(self.determine_doi(entry))
             meta = get_entry_metadata(entry)
-            for key in ['_target', '_profile', 'datacite.title', 'datacite.resourcetype', 'datacite.publisher', 'datacite.creator', 'datacite.publicationyear', 'datacite.Date', 'datacite.dateType']:
+            for key in ['_target', '_profile', 'datacite.title', 'datacite.resourcetype', 'datacite.publisher', 'datacite.creator', 'datacite.publicationyear', 'datacite.Date', 'datacite.dateType', '_status']:
                 if ent[key] != meta[key]:
                     if options.verbose:
                         print("%s: Updating DOI because of data change." % entry)
@@ -262,5 +262,5 @@ if __name__ == "__main__":
 
         # Withdraw
         if options.withdrawn:
-            for entry in [str(x[0]) for x in withdrawn]:
+            for entry in withdrawn:
                 session.withdraw(entry)
