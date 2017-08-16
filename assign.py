@@ -236,8 +236,8 @@ if __name__ == "__main__":
     cur = psycopg2.connect(user='ets', host='torpedo', database='ETS').cursor()
 
     if options.full:
-        entries = requests.get("https://webapi.bmrb.wisc.edu/v1/rest/list_entries/macromolecules").json()
-        entries.extend(requests.get("https://webapi.bmrb.wisc.edu/v1/rest/list_entries/metabolomics").json())
+        entries = requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=macromolecules").json()
+        entries.extend(requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=metabolomics").json())
     else:
         cur.execute("""SELECT bmrbnum FROM entrylog WHERE status LIKE 'rel%%' AND accession_date  > current_date - interval '%d days';""" % options.days)
         entries = [str(x[0]) for x in cur.fetchall()]
