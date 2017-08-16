@@ -20,6 +20,7 @@ parser.add_option("--dry-run", action="store_true", dest="dry_run", default=Fals
 parser.add_option("--withdraw", action="store_true", dest="withdrawn", default=False, help="Withdraw withdrawn entries.")
 parser.add_option("--verbose", action="store_true", dest="verbose", default=False, help="Be verbose.")
 parser.add_option("--days", action="store", dest="days", default=7, type="int", help="How many days back should we assign DOIs?")
+parser.add_option("--manual", action="store", dest="override", type="str", help="One entry ID to manually test.")
 
 # Options, parse 'em
 (options, args) = parser.parse_args()
@@ -171,9 +172,10 @@ class EZIDSession():
             ent = self.get_id(self.determine_doi(entry))
             meta = get_entry_metadata(entry)
             for key in ['_target', '_profile', 'datacite.title', 'datacite.resourcetype', 'datacite.publisher', 'datacite.creator', 'datacite.publicationyear', 'datacite.Date', 'datacite.dateType', '_status']:
-                if ent[key] != meta[key]:
+                if ent[key].strip() != meta[key].strip():
                     if options.verbose:
                         print("%s: Updating DOI because of data change." % entry)
+                        print("Key %s\nOld: '%s'\nNew: '%s'" % (key, meta[key], ent[key]))
                     status = self.update_doi(entry)
                     return
 
@@ -245,6 +247,9 @@ if __name__ == "__main__":
     if options.withdrawn:
         cur.execute("""SELECT bmrbnum FROM entrylog WHERE status LIKE 'awd%' AND bmrbnum IS NOT NULL ORDER BY bmrbnum;""")
         withdrawn = [str(x[0]) for x in cur.fetchall()]
+
+    if options.override:
+        entries = [options.override]
 
     if options.dry_run:
         for en in entries:
