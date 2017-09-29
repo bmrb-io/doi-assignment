@@ -1,6 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 """ Script to assign the DOIs. """
+
+from __future__ import print_function
 
 import anvl
 
