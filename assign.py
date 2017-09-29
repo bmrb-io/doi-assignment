@@ -12,6 +12,8 @@ import requests
 import psycopg2
 import pynmrstar
 
+from pynmrstar import bmrb as pynmrstar
+
 # Specify some basic information about our command
 usage = "usage: %prog"
 parser = optparse.OptionParser(usage=usage,version="%prog .1", description="Assign DOIs to new entries and make sure existing entries DOI information is up to date.")
