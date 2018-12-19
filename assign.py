@@ -7,43 +7,47 @@ from __future__ import print_function
 import anvl
 
 import sys
+import json
 import optparse
 import requests
 import psycopg2
 import pynmrstar
 
+import xml.etree.cElementTree as eTree
+from xml.etree.ElementTree import tostring as xml_tostring
+
 from pynmrstar import bmrb as pynmrstar
 
 # Specify some basic information about our command
 usage = "usage: %prog"
-parser = optparse.OptionParser(usage=usage,version="%prog .1", description="Assign DOIs to new entries and make sure existing entries DOI information is up to date.")
+parser = optparse.OptionParser(usage=usage, version="%prog .1",
+                               description="Assign DOIs to new entries and make sure existing entries DOI "
+                                           "information is up to date.")
 
 # Specify the common arguments
-parser.add_option("--full-run", action="store_true", dest="full", default=False, help="Try to add or update all entries in the DB and not just new ones.")
-parser.add_option("--dry-run", action="store_true", dest="dry_run", default=False, help="Do a dry run. Print what would be done but don't do it.")
-parser.add_option("--withdraw", action="store_true", dest="withdrawn", default=False, help="Withdraw withdrawn entries.")
+parser.add_option("--full-run", action="store_true", dest="full", default=False,
+                  help="Try to add or update all entries in the DB and not just new ones.")
+parser.add_option("--dry-run", action="store_true", dest="dry_run", default=False,
+                  help="Do a dry run. Print what would be done but don't do it.")
+parser.add_option("--withdraw", action="store_true", dest="withdrawn", default=False,
+                  help="Withdraw withdrawn entries.")
 parser.add_option("--verbose", action="store_true", dest="verbose", default=False, help="Be verbose.")
-parser.add_option("--days", action="store", dest="days", default=7, type="int", help="How many days back should we assign DOIs?")
+parser.add_option("--days", action="store", dest="days", default=7, type="int",
+                  help="How many days back should we assign DOIs?")
 parser.add_option("--manual", action="store", dest="override", type="str", help="One entry ID to manually test.")
 
 # Options, parse 'em
 (options, args) = parser.parse_args()
 
-class ServerError(EnvironmentError):
-    """ An error on the EZID server. """
-    pass
 
-class AuthenticationError(EnvironmentError):
-    """ An authentication error on the EZID server. """
-    pass
-
-class EZIDSession():
+class EZIDSession:
     """ A session with the EZID server."""
 
-    ezid_base = 'https://ezid.cdlib.org'
-    ezid_username = 'apitest'
-    ezid_password = ''
-    shoulder = 'doi:10.5072/FK2'
+    config = json.load(open('configuration.json', 'r'))
+    ezid_base = config['ezid_base']
+    ezid_username = config['ezid_username']
+    ezid_password = config['ezid_password']
+    shoulder = config['shoulder']
 
     def __init__(self):
         pass
@@ -55,20 +59,7 @@ class EZIDSession():
             print("Establishing session...")
 
         self.session = requests.Session()
-        self.session.headers.update({'Accept': 'text/plain',
-                                     'Content-Type': 'text/plain'})
-
-        # First make sure the server is online
-        r = self.session.get(self.ezid_base + "/status")
-        if r.status_code != 200 or not "success: EZID is up" in r.text:
-            raise ServerError("EZID server appears offline: (%s, '%s')" % (r.status_code, r.text))
-
-        # Then get the session key
-        r = self.session.get(self.ezid_base + "/login",
-                             auth=(self.ezid_username, self.ezid_password))
-
-        if "error" in r.text or r.status_code != 200:
-            raise AuthenticationError("Server responded with: %s" % r.text.rstrip())
+        self.session.auth = (self.ezid_username, self.ezid_password)
 
         return self
 
@@ -78,12 +69,8 @@ class EZIDSession():
         if options.verbose:
             print("Closing session...")
 
-        # End the EZID session
-        r = self.session.get(self.ezid_base + "/logout")
         # End the HTTP session
         self.session.close()
-        # If there was an error closing the session raise it
-        r.raise_for_status()
 
     def determine_doi(self, entry):
         """ Determines the DOI for an entry."""
@@ -98,143 +85,115 @@ class EZIDSession():
     def get_id(self, doi):
         """ Returns the information about a DOI."""
 
-        r = self.session.get("%s/id/%s" % (self.ezid_base, doi))
+        r = self.session.get("%s/metadata/%s" % (self.ezid_base, doi))
         r.raise_for_status()
 
-        return anvl.unescape_dictionary(r.text)
-
-    def create_doi(self, entry):
-        """ Creates a new DOI for an entry without one. """
-
-        if options.verbose:
-            print("Creating DOI for entry: %s" % entry)
-
-        entry_meta = get_entry_metadata(entry)
-        doi = self.determine_doi(entry)
-        url = "%s/id/%s" % (self.ezid_base, doi)
-
-        r = self.session.put(url, data=anvl.escape_dictionary(entry_meta))
-
-        # Success
-        if r.status_code < 300:
-            return True
-        # DOI already exists
-        elif r.status_code == 400:
-            if options.verbose:
-                print("Failed! DOI already exists.")
-            return False
-        # An actual error
-        else:
-            raise ServerError("Server responded with: %s" % r.text.rstrip())
+        return r.text
 
     def withdraw(self, entry):
         """ Withdrawn an entry. """
 
-        try:
-            ent = self.get_id(self.determine_doi(entry))
-            if "unavailable" in ent['_status']:
-                if options.verbose:
-                    print("No need to do anything - already withdrawn: %s" % entry)
-            else:
-                doi = self.determine_doi(entry)
-                url = "%s/id/%s" % (self.ezid_base, doi)
-                r = self.session.post(url, data=anvl.escape_dictionary({'_status': 'unavailable | withdrawn by author'}))
-                if r.status_code < 300:
-                    if options.verbose:
-                        print("Withdrew entry: %s" % entry)
-                else:
-                    if options.verbose:
-                        print("Failed to withdraw entry: %s" %s)
-        # No entry assigned, don't need to withdraw
-        except requests.exceptions.HTTPError:
-            if options.verbose:
-                print("Withdraw - entry never assigned: %s" % entry)
-
-    def update_doi(self, entry):
-        """ Update the metadata for an entry. """
-
-        entry_meta = get_entry_metadata(entry)
         doi = self.determine_doi(entry)
-        url = "%s/id/%s" % (self.ezid_base, doi)
+        url = "https://ez.datacite.org/id/%s" % doi
+        r = requests.post(url,
+                          data=anvl.escape_dictionary({'_status': 'unavailable | withdrawn by author'}),
+                          auth=(self.ezid_username, self.ezid_password),
+                          headers={'Accept': 'text/plain', 'Content-Type': 'text/plain'})
 
-        r = self.session.post(url, data=anvl.escape_dictionary(entry_meta))
-
-        # Success
         if r.status_code < 300:
             if options.verbose:
-                print("Success!")
-            return True
-        # An actual error
-        else:
-            raise ServerError("Server responded with: %s" % r.text.rstrip())
+                print("Withdrew entry: %s" % entry)
+        r.raise_for_status()
 
     def create_or_update_doi(self, entry):
-        """ Try to create a new DOI. If that fails update the
-        existing one."""
+        """ Assign the metadata, then update the URL/release the DOI if not yet created. """
 
-        try:
-            ent = self.get_id(self.determine_doi(entry))
-            meta = get_entry_metadata(entry)
-            for key in ['_target', '_profile', 'datacite.title', 'datacite.resourcetype', 'datacite.publisher', 'datacite.creator', 'datacite.publicationyear', 'datacite.Date', 'datacite.dateType', '_status']:
-                if ent[key].strip() != meta[key].strip():
-                    if options.verbose:
-                        print("%s: Updating DOI because of data change." % entry)
-                        print("Key %s\nOld: '%s'\nNew: '%s'" % (key, meta[key], ent[key]))
-                    status = self.update_doi(entry)
-                    return
+        entry_meta = self.get_entry_metadata(entry)
+        doi = self.determine_doi(entry)
 
-            if options.verbose:
-                print("%s: Skipping up to date entry." % entry)
+        # First create the metadata
+        url = "%s/metadata/%s" % (self.ezid_base, doi)
+        r = self.session.put(url, data=entry_meta, headers={'Content-Type': 'application/xml'})
 
-        except requests.exceptions.HTTPError:
-            status = session.create_doi(entry)
-            if options.verbose:
-                print("%s: Created new DOI for entry." % entry)
-            return
+        r.raise_for_status()
 
-def get_entry_metadata(entry):
-    """ Returns a python dict with all of the known information about
-    an entry."""
+        url = "%s/doi/%s" % (self.ezid_base, doi)
+        if entry.startswith("bmse"):
+            content_url = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_data.php?id=%s' % entry
+        elif entry.startswith("bmst"):
+            content_url = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_theory.php?id=%s' % entry
+        else:
+            content_url = 'http://www.bmrb.wisc.edu/data_library/summary/?bmrbId=%s' % entry
+        release_string = "doi=%s\nurl=%s" % (doi, content_url)
 
-    ent = pynmrstar.Entry.from_database(entry)
+        r = self.session.put(url, data=release_string, headers={'Content-Type': 'text/plain'})
+        r.raise_for_status()
 
-    meta = {'_profile': 'datacite'}
+        if options.verbose:
+            print("Created or updated entry: %s" % entry)
 
-    # Link should be to entry directory
-    if entry.startswith("bmse"):
-        meta['_target'] = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_data.php?id=%s' % entry
-    elif entry.startswith("bmst"):
-        meta['_target'] = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_theory.php?id=%s' % entry
-    else:
-        meta['_target'] = 'http://www.bmrb.wisc.edu/data_library/summary/?bmrbId=%s' % entry
+    def get_entry_metadata(self, entry):
+        """ Returns a python dict with all of the known information about
+        an entry."""
 
-    # Title
-    meta['datacite.title'] = ent.get_tag("entry.title")[0].replace("\n","")
-    meta['datacite.resourcetype'] = 'Dataset'
-    meta['datacite.publisher'] = 'Biological Magnetic Resonance Bank'
+        ent = pynmrstar.Entry.from_database(entry)
+        # Get the data we will need
+        authors = ent.get_loops_by_category('entry_author')[0].filter(
+            ['_Entry_author.Family_name', '_Entry_author.Given_name', '_Entry_author.Middle_initials']).data
+        release_loop = ent.get_loops_by_category('release')[0]
+        release_loop.sort_rows('release_number')
+        release_loop = release_loop.get_tag(['date', 'detail'])
 
-    # Get the authors in the form Last Name, Middle Initial, First Name,;
-    authors = ent.get_loops_by_category('entry_author')[0].filter(['_Entry_author.Family_name', '_Entry_author.Middle_initials', '_Entry_author.Given_name']).data
-    mod_auths = []
-    for auth in authors:
-        # Remove missing values
-        for pos, item in enumerate(auth):
-            if item == "" or item == ".":
-                auth.pop(pos)
-        # This should never fail since we shouldn't have empty authors
-        assert len(auth) > 0
-        mod_auths.append(", ".join(auth) + ",")
-    meta['datacite.creator'] = ";".join(mod_auths)
+        root = eTree.Element("resource")
+        root.set("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
+        root.set("xmlns", 'http://datacite.org/schema/kernel-4')
+        root.set("xsi:schemaLocation",
+                 "http://datacite.org/schema/kernel-4 http://schema.datacite.org/meta/kernel-4/metadata.xsd")
 
-    # Get first release date
-    release_loop = ent.get_loops_by_category('release')[0]
-    release_loop.sort_rows('release_number')
-    meta['datacite.publicationyear'] = release_loop.get_tag('date')[0][:4]
-    meta['datacite.Date'] = release_loop.get_tag('date')[0]
-    meta['datacite.dateType'] = 'Available'
-    meta['_status'] = "public"
+        identifier = eTree.SubElement(root, "identifier")
+        identifier.set("identifierType", 'DOI')
+        identifier.text = self.determine_doi(entry)
 
-    return meta
+        # Get the authors in the form Last Name, Middle Initial, First Name,;
+        creators = eTree.SubElement(root, "creators")
+        for auth in authors:
+            if auth[2] and auth[2] != ".":
+                auth[1] += " " + auth[2]
+            creator = eTree.SubElement(creators, "creator")
+            creator_name = eTree.SubElement(creator, 'creatorName')
+            creator_name.text = ", ".join([auth[0], auth[1]])
+            creator_name.set('nameType', 'Personal')
+
+            # Datacite doesn't like it when we provide these...
+            #if auth[0]:
+             #   eTree.SubElement(creator, 'familyName').text = auth[0]
+            #if auth[1] and auth[2]:
+             #   eTree.SubElement(creator, 'givenName').text = auth[1] + " " + auth[2]
+            #elif auth[1]:
+             #   eTree.SubElement(creator, 'givenName').text = auth[1]
+
+        titles = eTree.SubElement(root, "titles")
+        eTree.SubElement(titles, "title").text = ent.get_tag("entry.title")[0].replace("\n", "")
+        eTree.SubElement(root, "publisher").text = 'Biological Magnetic Resonance Bank'
+        eTree.SubElement(root, "publicationYear").text = release_loop[0][0][:4]
+        resource_type = eTree.SubElement(root, 'resourceType')
+
+        dates = eTree.SubElement(root, 'dates')
+        release_date = eTree.SubElement(dates, 'date')
+        release_date.set('dateType', 'Available')
+        release_date.set('dateInformation', release_loop[0][1])
+        release_date.text = release_loop[0][0]
+
+        for release in release_loop[1:]:
+            update_date = eTree.SubElement(dates, 'date')
+            update_date.set('dateType', 'Updated')
+            update_date.text = release[0]
+            update_date.set('dateInformation', release[1])
+
+        resource_type.set('resourceTypeGeneral', 'Dataset')
+
+        return xml_tostring(root, encoding="UTF-8")
+
 
 if __name__ == "__main__":
 
@@ -266,10 +225,10 @@ if __name__ == "__main__":
     # Start a session
     with EZIDSession() as session:
         # Assign or update
-        for entry in entries:
-            session.create_or_update_doi(entry)
+        for an_entry in entries:
+            session.create_or_update_doi(an_entry)
 
         # Withdraw
         if options.withdrawn:
-            for entry in withdrawn:
-                session.withdraw(entry)
+            for an_entry in withdrawn:
+                session.withdraw(an_entry)
