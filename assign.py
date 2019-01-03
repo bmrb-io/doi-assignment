@@ -16,8 +16,6 @@ import pynmrstar
 import xml.etree.cElementTree as eTree
 from xml.etree.ElementTree import tostring as xml_tostring
 
-import pynmrstar
-
 # Specify some basic information about our command
 usage = "usage: %prog"
 parser = optparse.OptionParser(usage=usage, version="%prog .1",
