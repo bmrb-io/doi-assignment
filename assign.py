@@ -16,7 +16,7 @@ import pynmrstar
 import xml.etree.cElementTree as eTree
 from xml.etree.ElementTree import tostring as xml_tostring
 
-from pynmrstar import bmrb as pynmrstar
+import pynmrstar
 
 # Specify some basic information about our command
 usage = "usage: %prog"
@@ -32,9 +32,11 @@ parser.add_option("--dry-run", action="store_true", dest="dry_run", default=Fals
 parser.add_option("--withdraw", action="store_true", dest="withdrawn", default=False,
                   help="Withdraw withdrawn entries.")
 parser.add_option("--verbose", action="store_true", dest="verbose", default=False, help="Be verbose.")
-parser.add_option("--days", action="store", dest="days", default=7, type="int",
+parser.add_option("--days", action="store", dest="days", default=0, type="int",
                   help="How many days back should we assign DOIs?")
 parser.add_option("--manual", action="store", dest="override", type="str", help="One entry ID to manually test.")
+parser.add_option("--database", action="store", type="choice", choices=['macromolecules', 'metabolomics', 'both'],
+                  default='both', dest="database", help="Select which DB to update, or 'both' to do both.")
 
 # Options, parse 'em
 (options, args) = parser.parse_args()
@@ -200,16 +202,19 @@ if __name__ == "__main__":
     # Fetch entries
     cur = psycopg2.connect(user='ets', host='torpedo', database='ETS').cursor()
 
-    if options.full:
+    entries = []
+    if options.database == "metabolomics":
+        entries = requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=metabolomics").json()
+    elif options.database == "macromolecules":
+        entries = requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=macromolecules").json()
+    elif options.database == "both":
         entries = requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=macromolecules").json()
         entries.extend(requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=metabolomics").json())
-    else:
+
+
+    if options.days != 0:
         cur.execute("""SELECT bmrbnum FROM entrylog WHERE status LIKE 'rel%%' AND accession_date  > current_date - interval '%d days';""" % options.days)
         entries = [str(x[0]) for x in cur.fetchall()]
-
-    if options.withdrawn:
-        cur.execute("""SELECT bmrbnum FROM entrylog WHERE status LIKE 'awd%' AND bmrbnum IS NOT NULL ORDER BY bmrbnum;""")
-        withdrawn = [str(x[0]) for x in cur.fetchall()]
 
     if options.override:
         entries = [options.override]
@@ -217,9 +222,6 @@ if __name__ == "__main__":
     if options.dry_run:
         for en in entries:
             print("Create or update: %s" % EZIDSession().determine_doi(en))
-        if options.withdrawn:
-            for en in withdrawn:
-                print("Withdraw: %s" % EZIDSession().determine_doi(en))
         sys.exit(0)
 
     # Start a session
@@ -231,8 +233,3 @@ if __name__ == "__main__":
             except IOError:
                 if options.verbose:
                     print("Skipping entry that isn't in redis yet: %s" % an_entry)
-
-        # Withdraw
-        if options.withdrawn:
-            for an_entry in withdrawn:
-                session.withdraw(an_entry)
