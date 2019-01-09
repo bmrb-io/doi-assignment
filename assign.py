@@ -6,6 +6,7 @@ from __future__ import print_function
 
 import anvl
 
+import os
 import sys
 import json
 import optparse
@@ -43,7 +44,8 @@ parser.add_option("--database", action="store", type="choice", choices=['macromo
 class EZIDSession:
     """ A session with the EZID server."""
 
-    config = json.load(open('configuration.json', 'r'))
+    config_file = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__))), 'configuration.json')
+    config = json.load(open(config_file, 'r'))
     ezid_base = config['ezid_base']
     ezid_username = config['ezid_username']
     ezid_password = config['ezid_password']
