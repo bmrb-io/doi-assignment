@@ -231,5 +231,4 @@ if __name__ == "__main__":
             try:
                 session.create_or_update_doi(an_entry)
             except IOError:
-                if options.verbose:
-                    print("Skipping entry that isn't in redis yet: %s" % an_entry)
+                print("Skipping entry that isn't in redis yet (did the DB reloader script run yet?): %s" % an_entry)
