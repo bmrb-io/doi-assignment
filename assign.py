@@ -211,7 +211,6 @@ if __name__ == "__main__":
         entries = requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=macromolecules").json()
         entries.extend(requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=metabolomics").json())
 
-
     if options.days != 0:
         cur.execute("""SELECT bmrbnum FROM entrylog WHERE status LIKE 'rel%%' AND accession_date  > current_date - interval '%d days';""" % options.days)
         entries = [str(x[0]) for x in cur.fetchall()]
@@ -230,5 +229,5 @@ if __name__ == "__main__":
         for an_entry in entries:
             try:
                 session.create_or_update_doi(an_entry)
-            except IOError:
-                print("Skipping entry that isn't in redis yet (did the DB reloader script run yet?): %s" % an_entry)
+            except IOError as e:
+                print("An exception occurred for entry %s: %s" % (an_entry, e.message))
