@@ -1,3 +1,5 @@
 #!/bin/bash
-source /condor/bmrbgrid/doi_assign/env/bin/activate
-/condor/bmrbgrid/doi_assign/assign.py "$@"
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+source ${DIR}/env/bin/activate
+${DIR}/assign.py "$@"

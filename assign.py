@@ -9,6 +9,7 @@ import anvl
 import os
 import sys
 import json
+import time
 import optparse
 import requests
 import psycopg2
@@ -229,5 +230,6 @@ if __name__ == "__main__":
         for an_entry in entries:
             try:
                 session.create_or_update_doi(an_entry)
+                time.sleep(.75)
             except IOError as e:
                 print("An exception occurred for entry %s: %s" % (an_entry, e.message))
