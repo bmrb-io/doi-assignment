@@ -108,9 +108,10 @@ class EZIDSession:
             r.raise_for_status()
 
             logging.info("Created or updated entry: %s" % entry)
-
-        except IOError as e:
-            logging.warning("An exception occurred for entry %s: %s" % (an_entry, e.message))
+        except IOError:
+            logging.exception("Entry not loaded in the DB %s." % entry)
+        except requests.HTTPError as e:
+            logging.warning("A HTTP exception occurred for entry %s: %s" % (entry, e.message))
             if timeout <= 64:
                 time.sleep(timeout)
                 return self.create_or_update_doi(entry, timeout)
