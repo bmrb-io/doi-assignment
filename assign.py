@@ -2,44 +2,20 @@
 
 """ Script to assign the DOIs. """
 
-from __future__ import print_function
-
-import anvl
-
+import json
+import logging
+import optparse
 import os
 import sys
-import json
 import time
-import optparse
-import requests
-import psycopg2
-import pynmrstar
-
 import xml.etree.cElementTree as eTree
 from xml.etree.ElementTree import tostring as xml_tostring
 
-# Specify some basic information about our command
-usage = "usage: %prog"
-parser = optparse.OptionParser(usage=usage, version="%prog .1",
-                               description="Assign DOIs to new entries and make sure existing entries DOI "
-                                           "information is up to date.")
+import psycopg2
+import pynmrstar
+import requests
 
-# Specify the common arguments
-parser.add_option("--full-run", action="store_true", dest="full", default=False,
-                  help="Try to add or update all entries in the DB and not just new ones.")
-parser.add_option("--dry-run", action="store_true", dest="dry_run", default=False,
-                  help="Do a dry run. Print what would be done but don't do it.")
-parser.add_option("--withdraw", action="store_true", dest="withdrawn", default=False,
-                  help="Withdraw withdrawn entries.")
-parser.add_option("--verbose", action="store_true", dest="verbose", default=False, help="Be verbose.")
-parser.add_option("--days", action="store", dest="days", default=0, type="int",
-                  help="How many days back should we assign DOIs?")
-parser.add_option("--manual", action="store", dest="override", type="str", help="One entry ID to manually test.")
-parser.add_option("--database", action="store", type="choice", choices=['macromolecules', 'metabolomics', 'both'],
-                  default='both', dest="database", help="Select which DB to update, or 'both' to do both.")
-
-# Options, parse 'em
-(options, args) = parser.parse_args()
+import anvl
 
 
 class EZIDSession:
@@ -58,8 +34,7 @@ class EZIDSession:
     def __enter__(self):
         """ Get a session cookie to use for future requests. """
 
-        if options.verbose:
-            print("Establishing session...")
+        logging.info("Establishing session...")
 
         self.session = requests.Session()
         self.session.auth = (self.ezid_username, self.ezid_password)
@@ -69,8 +44,7 @@ class EZIDSession:
     def __exit__(self, exc_type, exc_value, traceback):
         """ End the current session."""
 
-        if options.verbose:
-            print("Closing session...")
+        logging.info("Closing session...")
 
         # End the HTTP session
         self.session.close()
@@ -104,36 +78,46 @@ class EZIDSession:
                           headers={'Accept': 'text/plain', 'Content-Type': 'text/plain'})
 
         if r.status_code < 300:
-            if options.verbose:
-                print("Withdrew entry: %s" % entry)
+            logging.info("Withdrew entry: %s" % entry)
         r.raise_for_status()
 
-    def create_or_update_doi(self, entry):
+    def create_or_update_doi(self, entry, timeout=1):
         """ Assign the metadata, then update the URL/release the DOI if not yet created. """
 
-        entry_meta = self.get_entry_metadata(entry)
-        doi = self.determine_doi(entry)
+        timeout = timeout * 2
+        try:
+            entry_meta = self.get_entry_metadata(entry)
+            doi = self.determine_doi(entry)
 
-        # First create the metadata
-        url = "%s/metadata/%s" % (self.ezid_base, doi)
-        r = self.session.put(url, data=entry_meta, headers={'Content-Type': 'application/xml'})
+            # First create the metadata
+            url = "%s/metadata/%s" % (self.ezid_base, doi)
+            r = self.session.put(url, data=entry_meta, headers={'Content-Type': 'application/xml'})
 
-        r.raise_for_status()
+            r.raise_for_status()
 
-        url = "%s/doi/%s" % (self.ezid_base, doi)
-        if entry.startswith("bmse"):
-            content_url = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_data.php?id=%s' % entry
-        elif entry.startswith("bmst"):
-            content_url = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_theory.php?id=%s' % entry
-        else:
-            content_url = 'http://www.bmrb.wisc.edu/data_library/summary/?bmrbId=%s' % entry
-        release_string = "doi=%s\nurl=%s" % (doi, content_url)
+            url = "%s/doi/%s" % (self.ezid_base, doi)
+            if entry.startswith("bmse"):
+                content_url = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_data.php?id=%s' % entry
+            elif entry.startswith("bmst"):
+                content_url = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_theory.php?id=%s' % entry
+            else:
+                content_url = 'http://www.bmrb.wisc.edu/data_library/summary/?bmrbId=%s' % entry
+            release_string = "doi=%s\nurl=%s" % (doi, content_url)
 
-        r = self.session.put(url, data=release_string, headers={'Content-Type': 'text/plain'})
-        r.raise_for_status()
+            r = self.session.put(url, data=release_string, headers={'Content-Type': 'text/plain'})
+            r.raise_for_status()
 
-        if options.verbose:
-            print("Created or updated entry: %s" % entry)
+            logging.info("Created or updated entry: %s" % entry)
+
+        except IOError as e:
+            logging.warning("An exception occurred for entry %s: %s" % (an_entry, e.message))
+            if timeout <= 64:
+                time.sleep(timeout)
+                return self.create_or_update_doi(entry, timeout)
+            else:
+                logging.error('Multiple attempts to assign entry %s failed.' % entry)
+        finally:
+            time.sleep(1)
 
     def get_entry_metadata(self, entry):
         """ Returns a python dict with all of the known information about
@@ -200,6 +184,34 @@ class EZIDSession:
 
 if __name__ == "__main__":
 
+    # Specify some basic information about our command
+    usage = "usage: %prog"
+    parser = optparse.OptionParser(usage=usage, version="%prog .1",
+                                   description="Assign DOIs to new entries and make sure existing entries DOI "
+                                               "information is up to date.")
+
+    # Specify the common arguments
+    parser.add_option("--full-run", action="store_true", dest="full", default=False,
+                      help="Try to add or update all entries in the DB and not just new ones.")
+    parser.add_option("--dry-run", action="store_true", dest="dry_run", default=False,
+                      help="Do a dry run. Print what would be done but don't do it.")
+    parser.add_option("--verbose", action="store_true", dest="verbose", default=False, help="Be verbose.")
+    parser.add_option("--days", action="store", dest="days", default=0, type="int",
+                      help="How many days back should we assign DOIs?")
+    parser.add_option("--manual", action="store", dest="override", type="str", help="One entry ID to manually test.")
+    parser.add_option("--database", action="store", type="choice", choices=['macromolecules', 'metabolomics', 'both'],
+                      default='both', dest="database", help="Select which DB to update, or 'both' to do both.")
+
+    # Options, parse 'em
+    (options, args) = parser.parse_args()
+
+    logging.basicConfig()
+    logger = logging.getLogger()
+    if options.verbose:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.ERROR)
+
     # Fetch entries
     cur = psycopg2.connect(user='ets', host='torpedo', database='ETS').cursor()
 
@@ -221,15 +233,16 @@ if __name__ == "__main__":
 
     if options.dry_run:
         for en in entries:
-            print("Create or update: %s" % EZIDSession().determine_doi(en))
+            logger.setLevel(logging.INFO)
+            logger.info("Create or update: %s" % EZIDSession().determine_doi(en))
+            if options.verbose:
+                logger.setLevel(logging.DEBUG)
+            else:
+                logger.setLevel(logging.WARNING)
         sys.exit(0)
 
     # Start a session
     with EZIDSession() as session:
         # Assign or update
         for an_entry in entries:
-            try:
-                session.create_or_update_doi(an_entry)
-                time.sleep(.75)
-            except IOError as e:
-                print("An exception occurred for entry %s: %s" % (an_entry, e.message))
+            session.create_or_update_doi(an_entry)
