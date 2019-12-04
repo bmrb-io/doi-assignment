@@ -124,7 +124,10 @@ class EZIDSession:
         """ Returns a python dict with all of the known information about
         an entry."""
 
-        ent = pynmrstar.Entry.from_database(entry)
+        try:
+            ent = pynmrstar.Entry.from_database(entry)
+        except ValueError as err:
+            raise ValueError("Something went wrong when getting an entry (%s) from the database: %s" % (entry, err))
         # Get the data we will need
         authors = ent.get_loops_by_category('entry_author')[0].filter(
             ['_Entry_author.Family_name', '_Entry_author.Given_name', '_Entry_author.Middle_initials']).data
