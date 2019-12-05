@@ -108,15 +108,16 @@ class EZIDSession:
             r.raise_for_status()
 
             logging.info("Created or updated entry: %s" % entry)
-        except IOError:
-            logging.exception("Entry not loaded in the DB %s." % entry)
         except requests.HTTPError as e:
             logging.warning("A HTTP exception occurred for entry %s: %s" % (entry, e.message))
-            if timeout <= 64:
+            logging.info("Trying again...")
+            if timeout <= 128:
                 time.sleep(timeout)
                 return self.create_or_update_doi(entry, timeout)
             else:
                 logging.error('Multiple attempts to assign entry %s failed.' % entry)
+        except IOError as err:
+            logging.exception("Entry %s not loaded in the DB: %s" % (entry, err))
         finally:
             time.sleep(1)
 
@@ -229,7 +230,11 @@ if __name__ == "__main__":
         entries.extend(requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=metabolomics").json())
 
     if options.days != 0:
-        cur.execute("""SELECT bmrbnum FROM entrylog WHERE status LIKE 'rel%%' AND accession_date  > current_date - interval '%d days';""" % options.days)
+        cur.execute("""
+SELECT bmrbnum
+FROM entrylog
+WHERE status LIKE 'rel%%'
+  AND accession_date > current_date - INTERVAL '%d days';""" % options.days)
         entries = [str(x[0]) for x in cur.fetchall()]
 
     if options.override:
@@ -239,10 +244,6 @@ if __name__ == "__main__":
         for en in entries:
             logger.setLevel(logging.INFO)
             logger.info("Create or update: %s" % EZIDSession().determine_doi(en))
-            if options.verbose:
-                logger.setLevel(logging.DEBUG)
-            else:
-                logger.setLevel(logging.WARNING)
         sys.exit(0)
 
     # Start a session
