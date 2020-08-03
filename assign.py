@@ -218,7 +218,7 @@ if __name__ == "__main__":
         logger.setLevel(logging.ERROR)
 
     # Fetch entries
-    cur = psycopg2.connect(user='ets', host='torpedo', database='ETS').cursor()
+    cur = psycopg2.connect(user='ets', host='ets.bmrb.io', database='ETS').cursor()
 
     entries = []
     if options.database == "metabolomics":
