@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """ Script to assign the DOIs. """
 
@@ -97,11 +97,11 @@ class EZIDSession:
 
             url = "%s/doi/%s" % (self.ezid_base, doi)
             if entry.startswith("bmse"):
-                content_url = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_data.php?id=%s' % entry
+                content_url = 'https://bmrb.io/metabolomics/mol_summary/show_data.php?id=%s' % entry
             elif entry.startswith("bmst"):
-                content_url = 'http://www.bmrb.wisc.edu/metabolomics/mol_summary/show_theory.php?id=%s' % entry
+                content_url = 'https://bmrb.io/metabolomics/mol_summary/show_theory.php?id=%s' % entry
             else:
-                content_url = 'http://www.bmrb.wisc.edu/data_library/summary/?bmrbId=%s' % entry
+                content_url = 'https://bmrb.io/data_library/summary/?bmrbId=%s' % entry
             release_string = "doi=%s\nurl=%s" % (doi, content_url)
 
             r = self.session.put(url, data=release_string, headers={'Content-Type': 'text/plain'})
@@ -109,7 +109,7 @@ class EZIDSession:
 
             logging.info("Created or updated entry: %s" % entry)
         except requests.HTTPError as e:
-            logging.warning("A HTTP exception occurred for entry %s: %s" % (entry, e.message))
+            logging.warning("A HTTP exception occurred for entry %s: %s" % (entry, e))
             logging.info("Trying again...")
             if timeout <= 128:
                 time.sleep(timeout)
@@ -222,12 +222,12 @@ if __name__ == "__main__":
 
     entries = []
     if options.database == "metabolomics":
-        entries = requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=metabolomics").json()
+        entries = requests.get("https://bmrb.io/v2/list_entries?database=metabolomics").json()
     elif options.database == "macromolecules":
-        entries = requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=macromolecules").json()
+        entries = requests.get("https://bmrb.io/v2/list_entries?database=macromolecules").json()
     elif options.database == "both":
-        entries = requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=macromolecules").json()
-        entries.extend(requests.get("https://webapi.bmrb.wisc.edu/v2/list_entries?database=metabolomics").json())
+        entries = requests.get("https://bmrb.io/v2/list_entries?database=macromolecules").json()
+        entries.extend(requests.get("https://bmrb.io/v2/list_entries?database=metabolomics").json())
 
     if options.days != 0:
         cur.execute("""
