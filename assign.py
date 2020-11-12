@@ -97,11 +97,11 @@ class EZIDSession:
 
             url = "%s/doi/%s" % (self.ezid_base, doi)
             if entry.startswith("bmse"):
-                content_url = 'https://api.bmrb.io/metabolomics/mol_summary/show_data.php?id=%s' % entry
+                content_url = 'https://bmrb.io/metabolomics/mol_summary/show_data.php?id=%s' % entry
             elif entry.startswith("bmst"):
-                content_url = 'https://api.bmrb.io/metabolomics/mol_summary/show_theory.php?id=%s' % entry
+                content_url = 'https://bmrb.io/metabolomics/mol_summary/show_theory.php?id=%s' % entry
             else:
-                content_url = 'https://api.bmrb.io/data_library/summary/?bmrbId=%s' % entry
+                content_url = 'https://bmrb.io/data_library/summary/?bmrbId=%s' % entry
             release_string = "doi=%s\nurl=%s" % (doi, content_url)
 
             r = self.session.put(url, data=release_string, headers={'Content-Type': 'text/plain'})
