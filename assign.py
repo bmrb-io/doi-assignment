@@ -154,7 +154,7 @@ class EZIDSession:
             for auth in authors:
                 if auth[2] and auth[2] != ".":
                     auth[1] += " " + auth[2]
-        except KeyError:
+        except (ValueError, KeyError):
             authors = ent.get_loops_by_category('entry_author')[0].filter(
                 ['_Entry_author.Family_name', '_Entry_author.Given_name']).data
         for auth in authors:
