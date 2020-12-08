@@ -130,8 +130,6 @@ class EZIDSession:
         except ValueError as err:
             raise ValueError("Something went wrong when getting an entry (%s) from the database: %s" % (entry, err))
         # Get the data we will need
-        authors = ent.get_loops_by_category('entry_author')[0].filter(
-            ['_Entry_author.Family_name', '_Entry_author.Given_name', '_Entry_author.Middle_initials']).data
         release_loop = ent.get_loops_by_category('release')[0]
         release_loop.sort_rows('release_number')
         release_loop = release_loop.get_tag(['date', 'detail'])
@@ -148,9 +146,17 @@ class EZIDSession:
 
         # Get the authors in the form Last Name, Middle Initial, First Name,;
         creators = eTree.SubElement(root, "creators")
+
+        # Get the authors - with middle initial if possible, but if not, just use first and last
+        try:
+            authors = ent.get_tags(['_Entry_author.Family_name', '_Entry_author.Given_name',
+                                    '_Entry_author.Middle_initials'])
+            for auth in authors:
+                if auth[2] and auth[2] != ".":
+                    auth[1] += " " + auth[2]
+        except KeyError:
+            authors = ent.get_tags(['_Entry_author.Family_name', '_Entry_author.Given_name'])
         for auth in authors:
-            if auth[2] and auth[2] != ".":
-                auth[1] += " " + auth[2]
             creator = eTree.SubElement(creators, "creator")
             creator_name = eTree.SubElement(creator, 'creatorName')
             creator_name.text = ", ".join([auth[0], auth[1]])
