@@ -218,12 +218,30 @@ if __name__ == "__main__":
     # Options, parse 'em
     (options, args) = parser.parse_args()
 
-    logging.basicConfig()
-    logger = logging.getLogger()
+    # Set up logging. This allows us to use the standard logging module but have
+    #  warnings and above go to STDERR.
+    class InfoFilter(logging.Filter):
+        def filter(self, rec):
+            return rec.levelno in [logging.DEBUG, logging.INFO]
+
     if options.verbose:
-        logger.setLevel(logging.DEBUG)
+        logging.basicConfig(format='%(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
+                            level=logging.DEBUG)
     else:
-        logger.setLevel(logging.ERROR)
+        logging.basicConfig(format='%(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
+                            level=logging.INFO)
+
+    logger = logging.getLogger("__name__")
+
+    # Set up the stderr handler
+    h2 = logging.StreamHandler()
+    h2.setLevel(logging.WARNING)
+    logger.addHandler(h2)
+
+    # Set up the stdout handler
+    h1 = logging.StreamHandler(sys.stdout)
+    h1.addFilter(InfoFilter())
+    logger.addHandler(h1)
 
     # Fetch entries
     cur = psycopg2.connect(user='ets', host='ets.bmrb.io', database='ETS').cursor()
