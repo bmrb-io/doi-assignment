@@ -132,6 +132,7 @@ class EZIDSession:
         # Get the data we will need
         release_loop = ent.get_loops_by_category('release')[0]
         release_loop.sort_rows('release_number')
+        release_loop.add_missing_tags()
         release_loop = release_loop.get_tag(['date', 'detail'])
 
         root = eTree.Element("resource")
