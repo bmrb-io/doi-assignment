@@ -181,7 +181,8 @@ class EZIDSession:
         dates = eTree.SubElement(root, 'dates')
         release_date = eTree.SubElement(dates, 'date')
         release_date.set('dateType', 'Available')
-        release_date.set('dateInformation', release_loop[0][1])
+        if release_loop[0][1] and release_loop[0][1] not in pynmrstar.definitions.NULL_VALUES:
+            release_date.set('dateInformation', release_loop[0][1])
         release_date.text = release_loop[0][0]
 
         for release in release_loop[1:]:
