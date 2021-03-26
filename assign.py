@@ -209,10 +209,11 @@ if __name__ == "__main__":
                       help="Try to add or update all entries in the DB and not just new ones.")
     parser.add_option("--dry-run", action="store_true", dest="dry_run", default=False,
                       help="Do a dry run. Print what would be done but don't do it.")
-    parser.add_option("--verbose", action="store_true", dest="verbose", default=False, help="Be verbose.")
+    parser.add_option("-v", "--verbose", action="store_true", dest="verbose", default=False, help="Be verbose.")
     parser.add_option("--days", action="store", dest="days", default=0, type="int",
                       help="How many days back should we assign DOIs?")
-    parser.add_option("--manual", action="store", dest="override", type="str", help="One entry ID to manually test.")
+    parser.add_option("-m", "--manual", action="store", dest="override", type="str",
+                      help="One entry ID to manually test.")
     parser.add_option("--database", action="store", type="choice", choices=['macromolecules', 'metabolomics', 'both'],
                       default='both', dest="database", help="Select which DB to update, or 'both' to do both.")
 
