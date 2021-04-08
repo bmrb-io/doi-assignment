@@ -284,5 +284,4 @@ WHERE status LIKE 'awd%';""")
 
     with multiprocessing.Pool(multiprocessing.cpu_count()) as p:
         p.map(create_or_update_doi, entries)
-
-    #withdraw(entries[0])
+        #p.map(withdraw, withdrawn)
