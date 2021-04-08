@@ -263,7 +263,7 @@ if __name__ == "__main__":
             cur.execute("""
 SELECT bmrbnum
 FROM entrylog
-WHERE status LIKE 'w%%'
+WHERE status LIKE 'rel%%'
   AND accession_date > current_date - INTERVAL '%d days';""" % options.days)
             entries = [str(x[0]) for x in cur.fetchall()]
 
