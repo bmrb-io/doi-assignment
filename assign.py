@@ -16,7 +16,7 @@ import psycopg2
 import pynmrstar
 import requests
 
-# from datacite import DataCiteMDSClient
+from datacite import DataCiteMDSClient
 
 config_file = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__))), 'configuration.json')
 config = json.load(open(config_file, 'r'))
@@ -54,7 +54,7 @@ def determine_entry_url(entry, data_type='string') -> str:
             return f'https://bmrb.io/metabolomics/mol_summary/show_theory.php?id={entry}'
         else:
             return f'https://bmrb.io/data_library/summary/?bmrbId={entry}'
-    elif data_type == 'star':
+    elif data_type == 'nmrstar':
         if entry.startswith("bmse") or entry.startswith("bmst"):
             return f'https://bmrb.io/ftp/pub/bmrb/metabolomics/entry_directories/{entry}/{entry}.str'
         else:
@@ -182,6 +182,15 @@ def create_or_update_doi(entry, timeout=1):
         r = requests.put(url, json=full_data, auth=(username, password),
                          headers={'Content-Type': 'application/vnd.api+json'})
         r.raise_for_status()
+
+        # Initialize the MDS client.
+        d = DataCiteMDSClient(
+            username=username,
+            password=password,
+            prefix=shoulder
+        )
+        # Set alternate URL for content type (available through content negotiation)
+        d.media_post(doi, {"application/nmr-star": determine_entry_url(entry, data_type='nmrstar')})
 
         logging.info("Created or updated entry: %s" % entry)
     except requests.HTTPError as e:
