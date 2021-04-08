@@ -171,7 +171,7 @@ def create_or_update_doi(entry, timeout=1):
                 "id": doi,
                 "type": "dois",
                 "attributes": {
-                    "event": "hide",
+                    "event": "publish",
                     "doi": doi,
                     "url": determine_entry_url(entry),
                     "xml": get_entry_metadata(entry)
