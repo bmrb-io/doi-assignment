@@ -4,6 +4,7 @@
 
 import json
 import logging
+import multiprocessing
 import optparse
 import os
 import sys
@@ -17,52 +18,37 @@ import requests
 
 import anvl
 
+config_file = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__))), 'configuration.json')
+config = json.load(open(config_file, 'r'))
+ezid_base = config['ezid_base']
+ezid_username = config['ezid_username']
+ezid_password = config['ezid_password']
+shoulder = config['shoulder']
+
+
+def assign_id(entry_id):
+    with EZIDSession() as EZID:
+        EZID.create_or_update_doi(entry_id)
+
 
 class EZIDSession:
     """ A session with the EZID server."""
-
-    config_file = os.path.join(os.path.join(os.path.dirname(os.path.realpath(__file__))), 'configuration.json')
-    config = json.load(open(config_file, 'r'))
-    ezid_base = config['ezid_base']
-    ezid_username = config['ezid_username']
-    ezid_password = config['ezid_password']
-    shoulder = config['shoulder']
-
-    def __init__(self):
-        pass
-
-    def __enter__(self):
-        """ Get a session cookie to use for future requests. """
-
-        logging.info("Establishing session...")
-
-        self.session = requests.Session()
-        self.session.auth = (self.ezid_username, self.ezid_password)
-
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        """ End the current session."""
-
-        logging.info("Closing session...")
-
-        # End the HTTP session
-        self.session.close()
 
     def determine_doi(self, entry):
         """ Determines the DOI for an entry."""
 
         if entry.startswith("bmse") or entry.startswith("bmst"):
-            return '%s%s' % (self.shoulder, entry.upper())
+            return '%s%s' % (shoulder, entry.upper())
         elif entry.startswith("bmr"):
-            return '%s%s' % (self.shoulder, entry.upper())
+            return '%s%s' % (shoulder, entry.upper())
         else:
-            return '%sBMR%s' % (self.shoulder, entry)
+            return '%sBMR%s' % (shoulder, entry)
 
     def get_id(self, doi):
         """ Returns the information about a DOI."""
 
-        r = self.session.get("%s/metadata/%s" % (self.ezid_base, doi))
+        r = requests.get("%s/metadata/%s" % (ezid_base, doi),
+                         auth=(ezid_username, ezid_password))
         r.raise_for_status()
 
         return r.text
@@ -74,7 +60,7 @@ class EZIDSession:
         url = "https://ez.datacite.org/id/%s" % doi
         r = requests.post(url,
                           data=anvl.escape_dictionary({'_status': 'unavailable | withdrawn by author'}),
-                          auth=(self.ezid_username, self.ezid_password),
+                          auth=(ezid_username, ezid_password),
                           headers={'Accept': 'text/plain', 'Content-Type': 'text/plain'})
 
         if r.status_code < 300:
@@ -90,12 +76,14 @@ class EZIDSession:
             doi = self.determine_doi(entry)
 
             # First create the metadata
-            url = "%s/metadata/%s" % (self.ezid_base, doi)
-            r = self.session.put(url, data=entry_meta, headers={'Content-Type': 'application/xml'})
+            url = "%s/metadata/%s" % (ezid_base, doi)
+            r = requests.put(url, data=entry_meta,
+                             headers={'Content-Type': 'application/xml'},
+                             auth=(ezid_username, ezid_password))
 
             r.raise_for_status()
 
-            url = "%s/doi/%s" % (self.ezid_base, doi)
+            url = "%s/doi/%s" % (ezid_base, doi)
             if entry.startswith("bmse"):
                 content_url = 'https://bmrb.io/metabolomics/mol_summary/show_data.php?id=%s' % entry
             elif entry.startswith("bmst"):
@@ -104,7 +92,9 @@ class EZIDSession:
                 content_url = 'https://bmrb.io/data_library/summary/?bmrbId=%s' % entry
             release_string = "doi=%s\nurl=%s" % (doi, content_url)
 
-            r = self.session.put(url, data=release_string, headers={'Content-Type': 'text/plain'})
+            r = requests.put(url, data=release_string,
+                             headers={'Content-Type': 'text/plain'},
+                             auth=(ezid_username, ezid_password))
             r.raise_for_status()
 
             logging.info("Created or updated entry: %s" % entry)
@@ -165,12 +155,12 @@ class EZIDSession:
             creator_name.set('nameType', 'Personal')
 
             # Datacite doesn't like it when we provide these...
-            #if auth[0]:
-             #   eTree.SubElement(creator, 'familyName').text = auth[0]
-            #if auth[1] and auth[2]:
-             #   eTree.SubElement(creator, 'givenName').text = auth[1] + " " + auth[2]
-            #elif auth[1]:
-             #   eTree.SubElement(creator, 'givenName').text = auth[1]
+            # if auth[0]:
+            #   eTree.SubElement(creator, 'familyName').text = auth[0]
+            # if auth[1] and auth[2]:
+            #   eTree.SubElement(creator, 'givenName').text = auth[1] + " " + auth[2]
+            # elif auth[1]:
+            #   eTree.SubElement(creator, 'givenName').text = auth[1]
 
         titles = eTree.SubElement(root, "titles")
         eTree.SubElement(titles, "title").text = ent.get_tag("entry.title")[0].replace("\n", "")
@@ -226,6 +216,7 @@ if __name__ == "__main__":
         def filter(self, rec):
             return rec.levelno in [logging.DEBUG, logging.INFO]
 
+
     if options.verbose:
         logging.basicConfig(format='%(levelname)-8s [%(filename)s:%(lineno)d] %(message)s',
                             level=logging.DEBUG)
@@ -246,7 +237,7 @@ if __name__ == "__main__":
     logger.addHandler(h1)
 
     # Fetch entries
-    cur = psycopg2.connect(user='ets', host='ets.bmrb.io', database='ETS').cursor()
+    cur = psycopg2.connect(user='ets', host='localhost', database='ETS').cursor()
 
     entries = []
     if options.database == "metabolomics":
@@ -274,8 +265,5 @@ WHERE status LIKE 'rel%%'
             logger.info("Create or update: %s" % EZIDSession().determine_doi(en))
         sys.exit(0)
 
-    # Start a session
-    with EZIDSession() as session:
-        # Assign or update
-        for an_entry in entries:
-            session.create_or_update_doi(an_entry)
+    with multiprocessing.Pool(multiprocessing.cpu_count()) as p:
+        p.map(assign_id, entries)
