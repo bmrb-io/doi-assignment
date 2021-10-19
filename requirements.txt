@@ -1,3 +1,3 @@
-requests==2.25.1
-psycopg2-binary==2.8.6
-pynmrstar==3.1.0
+requests==2.26.0
+psycopg2-binary==2.9.1
+pynmrstar==3.2.1

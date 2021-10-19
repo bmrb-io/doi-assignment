@@ -10,6 +10,7 @@ import os
 import sys
 import time
 import xml.etree.cElementTree as eTree
+from typing import List
 from xml.etree.ElementTree import tostring as xml_tostring
 
 import psycopg2
@@ -28,7 +29,7 @@ shoulder = config['shoulder']
 
 def get_id(doi):
     """ Returns the information about a DOI."""
-    r = requests.get("%s/dois/%s" % (base_url, doi))
+    r = requests.get(f"{base_url}/dois/{doi}")
     r.raise_for_status()
     return r.json()
 
@@ -37,9 +38,11 @@ def determine_doi(entry):
     """ Determines the DOI for an entry."""
 
     if entry.startswith("bmse") or entry.startswith("bmst"):
-        return '%s%s' % (shoulder, entry.upper())
+        return f'{shoulder}{entry.upper()}'
     elif entry.startswith("bmr"):
-        return '%s%s' % (shoulder, entry.upper())
+        return f'{shoulder}{entry.upper()}'
+    elif entry.startswith("bmrbig"):
+        return f'{shoulder}{entry.upper()}'
     else:
         return '%sBMR%s' % (shoulder, entry)
 
@@ -50,6 +53,8 @@ def determine_entry_url(entry, data_type='string') -> str:
     if data_type == 'string':
         if entry.startswith("bmse"):
             return f'https://bmrb.io/metabolomics/mol_summary/show_data.php?id={entry}'
+        elif entry.startswith("bmrbig"):
+            return f'https://bmrbig.bmrb.io/released/{entry}'
         elif entry.startswith("bmst"):
             return f'https://bmrb.io/metabolomics/mol_summary/show_theory.php?id={entry}'
         else:
@@ -57,6 +62,8 @@ def determine_entry_url(entry, data_type='string') -> str:
     elif data_type == 'star':
         if entry.startswith("bmse") or entry.startswith("bmst"):
             return f'https://bmrb.io/ftp/pub/bmrb/metabolomics/entry_directories/{entry}/{entry}.str'
+        elif entry.startswith("bmrbig"):
+            return f'https://bmrbig.bmrb.io/deposition/released/{entry}/{entry}.str'
         else:
             return f'https://bmrb.io/ftp/pub/bmrb/entry_directories/bmr{entry}/bmr{entry}_3.str'
 
@@ -88,14 +95,20 @@ def get_entry_metadata(entry) -> str:
     an entry."""
 
     try:
-        ent = pynmrstar.Entry.from_database(entry)
+        if entry.startswith('bmrbig'):
+            ent = pynmrstar.Entry.from_file(determine_entry_url(entry, data_type='star'))
+        else:
+            ent = pynmrstar.Entry.from_database(entry)
     except ValueError as err:
         raise ValueError("Something went wrong when getting an entry (%s) from the database: %s" % (entry, err))
     # Get the data we will need
-    release_loop = ent.get_loops_by_category('release')[0]
-    release_loop.sort_rows('release_number')
-    release_loop.add_missing_tags()
-    release_loop = release_loop.get_tag(['date', 'detail'])
+    try:
+        release_loop = ent.get_loops_by_category('release')[0]
+        release_loop.sort_rows('release_number')
+        release_loop.add_missing_tags()
+        release_loop = release_loop.get_tag(['date', 'detail'])
+    except IndexError:
+        release_loop = [[ent.get_tag('_Entry.Original_release_date')[0], 'Original release date']]
 
     root = eTree.Element("resource")
     root.set("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
@@ -118,8 +131,9 @@ def get_entry_metadata(entry) -> str:
             if auth[2] and auth[2] != ".":
                 auth[1] += " " + auth[2]
     except (ValueError, KeyError):
-        authors = ent.get_loops_by_category('entry_author')[0].filter(
-            ['_Entry_author.Family_name', '_Entry_author.Given_name']).data
+        authors = ent.get_loops_by_category('entry_author')[0].filter(['Family_name', 'Given_name']).data
+    except IndexError:
+        authors = ent.get_loops_by_category('contact_person')[0].filter(['Family_name', 'Given_name']).data
     for auth in authors:
         creator = eTree.SubElement(creators, "creator")
         creator_name = eTree.SubElement(creator, 'creatorName')
@@ -198,6 +212,18 @@ def create_or_update_doi(entry, timeout=1):
         time.sleep(1)
 
 
+def get_bmrbig_entries() -> List[str]:
+    import sqlite3
+    conn = sqlite3.connect(config['bmrbig_database_path'])
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute('SELECT * from entrylog WHERE date(release_date) <= CURRENT_DATE')
+    entries = [f'bmrbig{_["bmrbig_id"]}' for _ in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return entries
+
+
 if __name__ == "__main__":
 
     # Specify some basic information about our command
@@ -216,8 +242,10 @@ if __name__ == "__main__":
                       help="How many days back should we assign DOIs?")
     parser.add_option("-m", "--manual", action="store", dest="override", type="str",
                       help="One entry ID to manually test.")
-    parser.add_option("--database", action="store", type="choice", choices=['macromolecules', 'metabolomics', 'both'],
-                      default='both', dest="database", help="Select which DB to update, or 'both' to do both.")
+    parser.add_option("--database", action="store", type="choice", choices=['macromolecules', 'metabolomics',
+                                                                            'bmrbig', 'both', 'all'],
+                      default='both', dest="database", help="Select which DB to update, or 'both' to do both main"
+                                                            " databases. 'all' for all three, including BMRbig.")
 
     # Options, parse 'em
     (options, args) = parser.parse_args()
@@ -253,9 +281,15 @@ if __name__ == "__main__":
         entries = requests.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json()
     elif options.database == "macromolecules":
         entries = requests.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
+    elif options.database == 'bmrbig':
+        entries = get_bmrbig_entries()
     elif options.database == "both":
         entries = requests.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
         entries.extend(requests.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json())
+    elif options.database == 'all':
+        entries = requests.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
+        entries.extend(requests.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json())
+        entries.extend(get_bmrbig_entries())
 
     if options.days != 0:
         with psycopg2.connect(user='ets', host='ets.bmrb.io', database='ETS') as conn:
@@ -282,6 +316,8 @@ WHERE status LIKE 'awd%';""")
             logger.info("Create or update: %s" % determine_doi(en))
         sys.exit(0)
 
-    with multiprocessing.Pool(multiprocessing.cpu_count()) as p:
-        p.map(create_or_update_doi, entries)
-        #p.map(withdraw, withdrawn)
+    for entry in entries:
+        create_or_update_doi(entry)
+    # with multiprocessing.Pool(multiprocessing.cpu_count()) as p:
+    #     p.map(create_or_update_doi, entries)
+    #     #p.map(withdraw, withdrawn)
