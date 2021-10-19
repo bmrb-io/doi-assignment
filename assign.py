@@ -244,7 +244,7 @@ if __name__ == "__main__":
                       help="One entry ID to manually test.")
     parser.add_option("--database", action="store", type="choice", choices=['macromolecules', 'metabolomics',
                                                                             'bmrbig', 'both', 'all'],
-                      default='both', dest="database", help="Select which DB to update, or 'both' to do both main"
+                      default='all', dest="database", help="Select which DB to update, or 'both' to do both main"
                                                             " databases. 'all' for all three, including BMRbig.")
 
     # Options, parse 'em
