@@ -211,13 +211,15 @@ def create_or_update_doi(entry, timeout=1):
     finally:
         time.sleep(1)
 
-
-def get_bmrbig_entries() -> List[str]:
+def get_bmrbig_entries(days_back: int = 0) -> List[str]:
     import sqlite3
     conn = sqlite3.connect(config['bmrbig_database_path'])
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute('SELECT * from entrylog WHERE date(release_date) <= CURRENT_DATE')
+    if days_back > 0:
+        cur.execute('SELECT * from entrylog WHERE date(release_date) <= CURRENT_DATE AND date(release_date) > date("now", ?)', (f'-{days_back} days',))
+    else:
+        cur.execute('SELECT * from entrylog WHERE date(release_date) <= CURRENT_DATE')
     entries = [f'bmrbig{_["bmrbig_id"]}' for _ in cur.fetchall()]
     cur.close()
     conn.close()
@@ -306,6 +308,9 @@ SELECT *
 FROM entrylog
 WHERE status LIKE 'awd%';""")
             withdrawn = cur.fetchall()
+
+        if options.database == "bmrbig" or options.database == "both":
+            entries.extend(get_bmrbig_entries(options.days))
 
     if options.override:
         entries = [options.override]
