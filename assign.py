@@ -309,7 +309,7 @@ FROM entrylog
 WHERE status LIKE 'awd%';""")
             withdrawn = cur.fetchall()
 
-        if options.database == "bmrbig" or options.database == "both":
+        if options.database == "bmrbig" or options.database == "all":
             entries.extend(get_bmrbig_entries(options.days))
 
     if options.override:
