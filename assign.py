@@ -415,9 +415,10 @@ WHERE status LIKE 'awd%';""")
 
     # Main thread fetches NMR-STAR records from BMRB (one at a time, so pynmrstar's
     # own 403-rate-limit backoff actually relieves pressure on the API). PUTs to
-    # DataCite are handed off to a small worker pool, paced by a shared rate
-    # limiter to stay under the 3000-requests-per-5-minutes authenticated cap.
-    put_workers = 4
+    # DataCite go to a single background worker, paced by a rate limiter — keeps
+    # writes strictly serial (DataCite returns 429 under concurrent load) while
+    # still pipelining fetch and PUT across the two threads.
+    put_workers = 1
     datacite_rate_per_second = 7.0
     rate_limiter = RateLimiter(datacite_rate_per_second)
 
