@@ -4,12 +4,13 @@
 import base64
 import json
 import logging
-import multiprocessing
 import optparse
 import os
 import sys
+import threading
 import time
 import xml.etree.cElementTree as eTree
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List
 from xml.etree.ElementTree import tostring as xml_tostring
 
@@ -26,10 +27,36 @@ username = config['username']
 password = config['password']
 shoulder = config['shoulder']
 
+# DataCite asks integrators to identify themselves via User-Agent w/ mailto.
+USER_AGENT = 'bmrb-doi-assignment/1.0 (mailto:wedell@uchc.edu)'
+
+# Shared session so we get connection pooling + the User-Agent on every call.
+session = requests.Session()
+session.headers.update({'User-Agent': USER_AGENT})
+
+
+class RateLimiter:
+    """Ensures at most ``rate_per_second`` ``acquire()`` calls cross per second,
+    across all threads. Simple monotonic-clock spacing — no burst allowance."""
+
+    def __init__(self, rate_per_second: float):
+        self._min_interval = 1.0 / rate_per_second
+        self._next_allowed = 0.0
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            wait = self._next_allowed - now
+            if wait > 0:
+                time.sleep(wait)
+                now = time.monotonic()
+            self._next_allowed = now + self._min_interval
+
 
 def get_id(doi):
     """ Returns the information about a DOI."""
-    r = requests.get(f"{base_url}/dois/{doi}")
+    r = session.get(f"{base_url}/dois/{doi}")
     r.raise_for_status()
     return r.json()
 
@@ -83,8 +110,8 @@ def withdraw(entry):
             }
         }
     }
-    r = requests.put(url, json=full_data, auth=(username, password),
-                     headers={'Content-Type': 'application/vnd.api+json'})
+    r = session.put(url, json=full_data, auth=(username, password),
+                    headers={'Content-Type': 'application/vnd.api+json'})
     if r.status_code < 300:
         logging.info("Withdrew entry: %s" % entry)
     r.raise_for_status()
@@ -174,42 +201,46 @@ def get_entry_metadata(entry) -> str:
     return b64_bytes.decode('UTF-8')
 
 
-def create_or_update_doi(entry, timeout=1):
-    """ Assign the metadata, then update the URL/release the DOI if not yet created. """
+def build_doi_payload(entry):
+    """Build the DataCite PUT payload for an entry. Fetches the entry's
+    NMR-STAR record from BMRB — meant to be called from a single thread so
+    pynmrstar's own 403 backoff isn't fighting concurrent fetches."""
+
+    doi = determine_doi(entry)
+    return doi, {
+        "data": {
+            "id": doi,
+            "type": "dois",
+            "attributes": {
+                "event": "publish",
+                "doi": doi,
+                "url": determine_entry_url(entry),
+                "xml": get_entry_metadata(entry),
+            },
+        },
+    }
+
+
+def put_doi(entry, doi, full_data, rate_limiter: 'RateLimiter', timeout=1):
+    """PUT a pre-built payload to DataCite. Pace is controlled by ``rate_limiter``;
+    HTTP errors retry on the same worker with an exponential backoff."""
 
     timeout = timeout * 2
     try:
-        doi = determine_doi(entry)
-        full_data = {
-            "data": {
-                "id": doi,
-                "type": "dois",
-                "attributes": {
-                    "event": "publish",
-                    "doi": doi,
-                    "url": determine_entry_url(entry),
-                    "xml": get_entry_metadata(entry)
-                }
-            }
-        }
         url = f"{base_url}/dois/{doi}"
-        r = requests.put(url, json=full_data, auth=(username, password),
-                         headers={'Content-Type': 'application/vnd.api+json'})
+        rate_limiter.acquire()
+        r = session.put(url, json=full_data, auth=(username, password),
+                        headers={'Content-Type': 'application/vnd.api+json'})
         r.raise_for_status()
-
         logging.info("Created or updated entry: %s" % entry)
     except requests.HTTPError as e:
         logging.warning("A HTTP exception occurred for entry %s: %s" % (entry, e))
         logging.info("Trying again...")
         if timeout <= 128:
             time.sleep(timeout)
-            return create_or_update_doi(entry, timeout)
+            return put_doi(entry, doi, full_data, rate_limiter, timeout)
         else:
             logging.error('Multiple attempts to assign entry %s failed.' % entry)
-    except IOError as err:
-        logging.exception("Entry %s not loaded in the DB: %s" % (entry, err))
-    finally:
-        time.sleep(1)
 
 def get_bmrbig_entries(days_back: int = 0) -> List[str]:
     import sqlite3
@@ -280,17 +311,17 @@ if __name__ == "__main__":
 
     entries = []
     if options.database == "metabolomics":
-        entries = requests.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json()
+        entries = session.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json()
     elif options.database == "macromolecules":
-        entries = requests.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
+        entries = session.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
     elif options.database == 'bmrbig':
         entries = get_bmrbig_entries()
     elif options.database == "both":
-        entries = requests.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
-        entries.extend(requests.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json())
+        entries = session.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
+        entries.extend(session.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json())
     elif options.database == 'all':
-        entries = requests.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
-        entries.extend(requests.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json())
+        entries = session.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
+        entries.extend(session.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json())
         entries.extend(get_bmrbig_entries())
 
     if options.days != 0:
@@ -321,8 +352,22 @@ WHERE status LIKE 'awd%';""")
             logger.info("Create or update: %s" % determine_doi(en))
         sys.exit(0)
 
-    for entry in entries:
-        create_or_update_doi(entry)
-    # with multiprocessing.Pool(multiprocessing.cpu_count()) as p:
-    #     p.map(create_or_update_doi, entries)
-    #     #p.map(withdraw, withdrawn)
+    # Main thread fetches NMR-STAR records from BMRB (one at a time, so pynmrstar's
+    # own 403-rate-limit backoff actually relieves pressure on the API). PUTs to
+    # DataCite are handed off to a small worker pool, paced by a shared rate
+    # limiter to stay under the 3000-requests-per-5-minutes authenticated cap.
+    put_workers = 4
+    datacite_rate_per_second = 7.0
+    rate_limiter = RateLimiter(datacite_rate_per_second)
+
+    with ThreadPoolExecutor(max_workers=put_workers) as executor:
+        futures = []
+        for entry in entries:
+            try:
+                doi, full_data = build_doi_payload(entry)
+            except (requests.HTTPError, IOError, ValueError, KeyError) as err:
+                logging.warning("Could not fetch entry %s from BMRB: %s" % (entry, err))
+                continue
+            futures.append(executor.submit(put_doi, entry, doi, full_data, rate_limiter))
+        for future in as_completed(futures):
+            future.result()
