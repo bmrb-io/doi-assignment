@@ -175,21 +175,6 @@ def withdraw(entry):
     r.raise_for_status()
 
 
-def _fetch_entry_information_saveframe(entry: str) -> 'pynmrstar.Saveframe':
-    """Fetch just the entry_information saveframe for a BMRB entry via the API.
-    Avoids downloading the full entry (often many MB) when we only need title,
-    release dates, and author/contact lists."""
-
-    url = f'https://api.bmrb.io/v2/entry/{entry}?saveframe_category=entry_information'
-    r = session.get(url)
-    r.raise_for_status()
-    try:
-        sf_json = r.json()[entry]['entry_information'][0]
-    except (KeyError, IndexError):
-        raise ValueError(f'No entry_information saveframe returned for {entry}')
-    return pynmrstar.Saveframe.from_json(sf_json)
-
-
 def get_entry_metadata(entry) -> str:
     """ Returns a base-64 encoded XML string with all of the known information about
     an entry."""
@@ -197,19 +182,18 @@ def get_entry_metadata(entry) -> str:
     try:
         if entry.startswith('bmrbig'):
             ent = pynmrstar.Entry.from_file(determine_entry_url(entry, data_type='star'))
-            sf = ent.get_saveframes_by_category('entry_information')[0]
         else:
-            sf = _fetch_entry_information_saveframe(entry)
-    except (ValueError, IndexError, requests.HTTPError) as err:
+            ent = pynmrstar.Entry.from_database(entry)
+    except ValueError as err:
         raise ValueError("Something went wrong when getting an entry (%s) from the database: %s" % (entry, err))
     # Get the data we will need
     try:
-        release_loop = sf.get_loop('Release')
+        release_loop = ent.get_loops_by_category('release')[0]
         release_loop.sort_rows('release_number')
         release_loop.add_missing_tags()
         release_loop = release_loop.get_tag(['date', 'detail'])
-    except KeyError:
-        release_loop = [[sf.get_tag('Original_release_date')[0], 'Original release date']]
+    except IndexError:
+        release_loop = [[ent.get_tag('_Entry.Original_release_date')[0], 'Original release date']]
 
     root = eTree.Element("resource")
     root.set("xmlns:xsi", "http://www.w3.org/2001/XMLSchema-instance")
@@ -226,21 +210,15 @@ def get_entry_metadata(entry) -> str:
 
     # Get the authors - with middle initial if possible, but if not, just use first and last
     try:
-        entry_author = sf.get_loop('Entry_author')
-    except KeyError:
-        entry_author = None
-
-    if entry_author is not None:
-        try:
-            authors = entry_author.filter(
-                ['_Entry_author.Family_name', '_Entry_author.Given_name', '_Entry_author.Middle_initials']).data
-            for auth in authors:
-                if auth[2] and auth[2] != ".":
-                    auth[1] += " " + auth[2]
-        except (ValueError, KeyError):
-            authors = entry_author.filter(['Family_name', 'Given_name']).data
-    else:
-        authors = sf.get_loop('Contact_person').filter(['Family_name', 'Given_name']).data
+        authors = ent.get_loops_by_category('entry_author')[0].filter(
+            ['_Entry_author.Family_name', '_Entry_author.Given_name', '_Entry_author.Middle_initials']).data
+        for auth in authors:
+            if auth[2] and auth[2] != ".":
+                auth[1] += " " + auth[2]
+    except (ValueError, KeyError):
+        authors = ent.get_loops_by_category('entry_author')[0].filter(['Family_name', 'Given_name']).data
+    except IndexError:
+        authors = ent.get_loops_by_category('contact_person')[0].filter(['Family_name', 'Given_name']).data
     for auth in authors:
         creator = eTree.SubElement(creators, "creator")
         creator_name = eTree.SubElement(creator, 'creatorName')
@@ -256,7 +234,7 @@ def get_entry_metadata(entry) -> str:
         #   eTree.SubElement(creator, 'givenName').text = auth[1]
 
     titles = eTree.SubElement(root, "titles")
-    eTree.SubElement(titles, "title").text = sf.get_tag("Title")[0].replace("\n", "")
+    eTree.SubElement(titles, "title").text = ent.get_tag("entry.title")[0].replace("\n", "")
     eTree.SubElement(root, "publisher").text = 'Biological Magnetic Resonance Bank'
     eTree.SubElement(root, "publicationYear").text = release_loop[0][0][:4]
     resource_type = eTree.SubElement(root, 'resourceType')
@@ -392,42 +370,42 @@ if __name__ == "__main__":
     h1.addFilter(InfoFilter())
     logger.addHandler(h1)
 
-    if options.override:
-        entries = [options.override]
-    else:
-        entries = []
-        if options.database == "metabolomics":
-            entries = session.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json()
-        elif options.database == "macromolecules":
-            entries = session.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
-        elif options.database == 'bmrbig':
-            entries = get_bmrbig_entries()
-        elif options.database == "both":
-            entries = session.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
-            entries.extend(session.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json())
-        elif options.database == 'all':
-            entries = session.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
-            entries.extend(session.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json())
-            entries.extend(get_bmrbig_entries())
+    entries = []
+    if options.database == "metabolomics":
+        entries = session.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json()
+    elif options.database == "macromolecules":
+        entries = session.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
+    elif options.database == 'bmrbig':
+        entries = get_bmrbig_entries()
+    elif options.database == "both":
+        entries = session.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
+        entries.extend(session.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json())
+    elif options.database == 'all':
+        entries = session.get("https://api.bmrb.io/v2/list_entries?database=macromolecules").json()
+        entries.extend(session.get("https://api.bmrb.io/v2/list_entries?database=metabolomics").json())
+        entries.extend(get_bmrbig_entries())
 
-        if options.days != 0:
-            with psycopg2.connect(user='ets', host='ets.bmrb.io', database='ETS') as conn:
-                cur = conn.cursor()
-                cur.execute("""
+    if options.days != 0:
+        with psycopg2.connect(user='ets', host='ets.bmrb.io', database='ETS') as conn:
+            cur = conn.cursor()
+            cur.execute("""
 SELECT bmrbnum
 FROM entrylog
 WHERE status LIKE 'rel%%'
   AND accession_date > current_date - INTERVAL '%d days';""" % options.days)
-                entries = [str(x[0]) for x in cur.fetchall()]
+            entries = [str(x[0]) for x in cur.fetchall()]
 
-                cur.execute("""
+            cur.execute("""
 SELECT *
 FROM entrylog
 WHERE status LIKE 'awd%';""")
-                withdrawn = cur.fetchall()
+            withdrawn = cur.fetchall()
 
-            if options.database == "bmrbig" or options.database == "all":
-                entries.extend(get_bmrbig_entries(options.days))
+        if options.database == "bmrbig" or options.database == "all":
+            entries.extend(get_bmrbig_entries(options.days))
+
+    if options.override:
+        entries = [options.override]
 
     if options.dry_run:
         for en in entries:
