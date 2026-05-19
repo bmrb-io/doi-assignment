@@ -2,16 +2,18 @@
 
 """ Script to assign the DOIs. """
 import base64
+import hashlib
 import json
 import logging
 import optparse
 import os
+import sqlite3
 import sys
 import threading
 import time
 import xml.etree.cElementTree as eTree
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List
+from typing import List, Optional, Tuple
 from xml.etree.ElementTree import tostring as xml_tostring
 
 import psycopg2
@@ -52,6 +54,62 @@ class RateLimiter:
                 time.sleep(wait)
                 now = time.monotonic()
             self._next_allowed = now + self._min_interval
+
+
+_cache_lock = threading.Lock()
+_cache_conn: Optional[sqlite3.Connection] = None
+
+
+def _open_payload_cache() -> sqlite3.Connection:
+    """Open (and lazily initialize) the local sqlite cache that records the
+    hash of the last DataCite payload we successfully PUT for each DOI."""
+
+    global _cache_conn
+    if _cache_conn is not None:
+        return _cache_conn
+
+    cache_path = config.get('payload_cache_path') or os.path.join(
+        os.path.dirname(os.path.realpath(__file__)), 'doi_payload_cache.sqlite3')
+    # check_same_thread=False is safe here because every read/write is guarded
+    # by _cache_lock — sqlite itself is fine with cross-thread use under a lock.
+    _cache_conn = sqlite3.connect(cache_path, check_same_thread=False)
+    _cache_conn.execute("""
+        CREATE TABLE IF NOT EXISTS doi_payload_cache (
+            doi TEXT PRIMARY KEY,
+            payload_hash TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    _cache_conn.commit()
+    return _cache_conn
+
+
+def payload_hash(full_data: dict) -> str:
+    """Stable hash of the parts of the DataCite payload we actually send.
+    Covers both the XML metadata and the URL so a URL-only change still PUTs."""
+
+    canonical = json.dumps(full_data['data']['attributes'], sort_keys=True)
+    return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
+
+
+def payload_cache_lookup(doi: str) -> Optional[str]:
+    conn = _open_payload_cache()
+    with _cache_lock:
+        cur = conn.execute("SELECT payload_hash FROM doi_payload_cache WHERE doi = ?", (doi,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def payload_cache_store(doi: str, digest: str) -> None:
+    conn = _open_payload_cache()
+    with _cache_lock:
+        conn.execute(
+            "INSERT INTO doi_payload_cache (doi, payload_hash, updated_at) "
+            "VALUES (?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(doi) DO UPDATE SET "
+            "payload_hash=excluded.payload_hash, updated_at=CURRENT_TIMESTAMP",
+            (doi, digest))
+        conn.commit()
 
 
 def get_id(doi):
@@ -221,9 +279,11 @@ def build_doi_payload(entry):
     }
 
 
-def put_doi(entry, doi, full_data, rate_limiter: 'RateLimiter', timeout=1):
+def put_doi(entry, doi, full_data, digest: str, rate_limiter: 'RateLimiter', timeout=1):
     """PUT a pre-built payload to DataCite. Pace is controlled by ``rate_limiter``;
-    HTTP errors retry on the same worker with an exponential backoff."""
+    HTTP errors retry on the same worker with an exponential backoff. On success,
+    records ``digest`` in the local cache so a future run can skip an unchanged
+    payload."""
 
     timeout = timeout * 2
     try:
@@ -232,13 +292,14 @@ def put_doi(entry, doi, full_data, rate_limiter: 'RateLimiter', timeout=1):
         r = session.put(url, json=full_data, auth=(username, password),
                         headers={'Content-Type': 'application/vnd.api+json'})
         r.raise_for_status()
+        payload_cache_store(doi, digest)
         logging.info("Created or updated entry: %s" % entry)
     except requests.HTTPError as e:
         logging.warning("A HTTP exception occurred for entry %s: %s" % (entry, e))
         logging.info("Trying again...")
         if timeout <= 128:
             time.sleep(timeout)
-            return put_doi(entry, doi, full_data, rate_limiter, timeout)
+            return put_doi(entry, doi, full_data, digest, rate_limiter, timeout)
         else:
             logging.error('Multiple attempts to assign entry %s failed.' % entry)
 
@@ -362,12 +423,19 @@ WHERE status LIKE 'awd%';""")
 
     with ThreadPoolExecutor(max_workers=put_workers) as executor:
         futures = []
+        skipped = 0
         for entry in entries:
             try:
                 doi, full_data = build_doi_payload(entry)
             except (requests.HTTPError, IOError, ValueError, KeyError) as err:
                 logging.warning("Could not fetch entry %s from BMRB: %s" % (entry, err))
                 continue
-            futures.append(executor.submit(put_doi, entry, doi, full_data, rate_limiter))
+            digest = payload_hash(full_data)
+            if payload_cache_lookup(doi) == digest:
+                skipped += 1
+                logging.debug("Payload unchanged for %s, skipping PUT" % entry)
+                continue
+            futures.append(executor.submit(put_doi, entry, doi, full_data, digest, rate_limiter))
         for future in as_completed(futures):
             future.result()
+        logging.info("Submitted %d PUTs, skipped %d unchanged" % (len(futures), skipped))
